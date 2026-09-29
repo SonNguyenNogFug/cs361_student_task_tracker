@@ -1,31 +1,235 @@
 import tkinter as tk
 from tkinter import messagebox
+import requests
 
+AUTH_URL = "http://127.0.0.1:5001"
+PRIORITY_URL = "http://127.0.0.1:5002"
+TIME_TRACKING_URL = "http://127.0.0.1:5003"
+SUMMARY_URL = "http://127.0.0.1:5009"
 
 tasks = []
 
+def login_user(username, password):
+    try:
+        response = requests.post(
+            f"{AUTH_URL}/auth/login",
+            json={
+                "username": username,
+                "password": password
+            },
+            timeout=3
+        )
+
+        data = response.json()
+
+        if response.status_code == 200:
+            return True, data
+
+        return False, data.get("message", "Login failed.")
+
+    except requests.RequestException:
+        return False, "Auth microservice is not available."
+
+def get_task_priority(due_date, importance):
+    try:
+        response = requests.post(
+            f"{PRIORITY_URL}/priority",
+            json={
+                "due_date": due_date,
+                "importance": importance
+            },
+            timeout=3
+        )
+
+        data = response.json()
+
+        if response.status_code == 200:
+            return True, data["priority"]
+
+        return False, data.get("message", "Could not calculate priority.")
+
+    except requests.RequestException:
+        return False, "Priority Scoring microservice is not available."
+
+def start_task_timer(task_id):
+    try:
+        response = requests.post(
+            f"{TIME_TRACKING_URL}/timer/start",
+            json={"task_id": task_id},
+            timeout=3
+        )
+
+        data = response.json()
+
+        if response.status_code == 200:
+            return True, data
+
+        return False, data.get("message", "Could not start timer.")
+
+    except requests.RequestException:
+        return False, "Time Tracking microservice is not available."
+
+def stop_task_timer(task_id):
+    try:
+        response = requests.post(
+            f"{TIME_TRACKING_URL}/timer/stop",
+            json={"task_id": task_id},
+            timeout=3
+        )
+
+        data = response.json()
+
+        if response.status_code == 200:
+            return True, data
+
+        return False, data.get("message", "Could not stop timer.")
+
+    except requests.RequestException:
+        return False, "Time Tracking microservice is not available."
+
+def start_selected_timer():
+    selection = task_listbox.curselection()
+
+    if not selection:
+        view_status_label.config(
+            text="Please select a task first.",
+            fg="red"
+        )
+        return
+
+    task = tasks[selection[0]]
+
+    success, result = start_task_timer(task["name"])
+
+    if success:
+        view_status_label.config(
+            text=f'Timer started for "{task["name"]}".',
+            fg="green"
+        )
+    else:
+        view_status_label.config(text=str(result), fg="red")
+
+def stop_selected_timer():
+    selection = task_listbox.curselection()
+
+    if not selection:
+        view_status_label.config(
+            text="Please select a task first.",
+            fg="red"
+        )
+        return
+
+    task = tasks[selection[0]]
+
+    success, result = stop_task_timer(task["name"])
+
+    if success:
+        view_status_label.config(
+            text=(
+                f'Timer stopped for "{task["name"]}". '
+                f'Session: {result["time_spent_seconds"]} sec | '
+                f'Total: {result["total_time_seconds"]} sec'
+            ),
+            fg="green"
+        )
+    else:
+        view_status_label.config(text=str(result), fg="red")
+
+def get_task_summary():
+    try:
+        records = [
+            1 if task["completed"] else 0
+            for task in tasks
+        ]
+
+        response = requests.post(
+            f"{SUMMARY_URL}/summary",
+            json={"records": records},
+            timeout=3
+        )
+
+        data = response.json()
+
+        if response.status_code == 200:
+            return True, data
+
+        return False, data.get("error", "Could not calculate summary.")
+
+    except requests.RequestException:
+        return False, "Record Summary microservice is not available."
+
+def show_progress_summary():
+    success, result = get_task_summary()
+
+    if not success:
+        messagebox.showerror("Progress Summary", str(result))
+        return
+
+    completed = result["total"]
+    total = result["count"]
+    percent = result["average"] * 100
+
+    messagebox.showinfo(
+        "Progress Summary",
+        f"Completed Tasks: {completed}/{total}\n"
+        f"Progress: {percent:.0f}%"
+    )
 
 def show_frame(frame):
     welcome_frame.pack_forget()
+    login_frame.pack_forget()
     main_menu_frame.pack_forget()
     add_task_frame.pack_forget()
     view_tasks_frame.pack_forget()
     complete_task_frame.pack_forget()
     frame.pack(fill="both", expand=True)
 
-
 def open_main_menu():
     show_frame(main_menu_frame)
 
+def open_login():
+    username_entry.delete(0, tk.END)
+    password_entry.delete(0, tk.END)
+    login_status_label.config(text="")
+    show_frame(login_frame)
+
+
+def handle_login():
+    username = username_entry.get().strip()
+    password = password_entry.get().strip()
+
+    if username == "" or password == "":
+        login_status_label.config(
+            text="Please enter a username and password.",
+            fg="red"
+        )
+        return
+
+    success, result = login_user(username, password)
+
+    if success:
+        login_status_label.config(
+            text="Login successful.",
+            fg="green"
+        )
+        open_main_menu()
+    else:
+        login_status_label.config(
+            text=str(result),
+            fg="red"
+        )
 
 def open_add_task():
     task_entry.delete(0, tk.END)
+    due_date_entry.delete(0, tk.END)
+    importance_var.set("Medium")
     add_status_label.config(text="")
     show_frame(add_task_frame)
 
-
 def add_task():
     task_name = task_entry.get().strip()
+    due_date = due_date_entry.get().strip()
+    importance = importance_var.get()
 
     if task_name == "":
         add_status_label.config(
@@ -34,15 +238,35 @@ def add_task():
         )
         return
 
+    if due_date == "":
+        add_status_label.config(
+            text="Please enter a due date.",
+            fg="red"
+        )
+        return
+
+    success, result = get_task_priority(due_date, importance)
+
+    if not success:
+        add_status_label.config(
+            text=str(result),
+            fg="red"
+        )
+        return
+
     tasks.append({
         "name": task_name,
+        "due_date": due_date,
+        "importance": importance,
+        "priority": result,
         "completed": False
     })
 
     task_entry.delete(0, tk.END)
+    due_date_entry.delete(0, tk.END)
 
     add_status_label.config(
-        text=f'"{task_name}" was added successfully.',
+        text=f'"{task_name}" was added with {result} priority.',
         fg="green"
     )
 
@@ -64,7 +288,8 @@ def open_view_tasks():
 
             task_listbox.insert(
                 tk.END,
-                f"{status} {task['name']}"
+                f"{status} {task['name']} | Due: {task['due_date']} | "
+                f"Importance: {task['importance']} | Priority: {task['priority']}"
             )
 
     show_frame(view_tasks_frame)
@@ -166,9 +391,64 @@ get_started_button = tk.Button(
     welcome_frame,
     text="Get Started",
     font=("Arial", 12),
-    command=open_main_menu
+    command=open_login
 )
 get_started_button.pack(pady=20)
+
+# Login page
+login_frame = tk.Frame(root, padx=30, pady=30)
+
+login_title = tk.Label(
+    login_frame,
+    text="Login",
+    font=("Arial", 22, "bold")
+)
+login_title.pack(pady=20)
+
+username_label = tk.Label(
+    login_frame,
+    text="Username:",
+    font=("Arial", 12)
+)
+username_label.pack(pady=5)
+
+username_entry = tk.Entry(
+    login_frame,
+    width=30,
+    font=("Arial", 12)
+)
+username_entry.pack(pady=5)
+
+password_label = tk.Label(
+    login_frame,
+    text="Password:",
+    font=("Arial", 12)
+)
+password_label.pack(pady=5)
+
+password_entry = tk.Entry(
+    login_frame,
+    width=30,
+    font=("Arial", 12),
+    show="*"
+)
+password_entry.pack(pady=5)
+
+login_button = tk.Button(
+    login_frame,
+    text="Login",
+    width=20,
+    font=("Arial", 12),
+    command=handle_login
+)
+login_button.pack(pady=15)
+
+login_status_label = tk.Label(
+    login_frame,
+    text="",
+    font=("Arial", 11)
+)
+login_status_label.pack(pady=5)
 
 # Main menu page
 main_menu_frame = tk.Frame(root, padx=30, pady=30)
@@ -248,6 +528,15 @@ how_it_works_button = tk.Button(
 )
 how_it_works_button.pack(pady=8)
 
+progress_button = tk.Button(
+    main_menu_frame,
+    text="View Progress",
+    width=22,
+    font=("Arial", 12),
+    command=show_progress_summary
+)
+progress_button.pack(pady=8)
+
 exit_button = tk.Button(
     main_menu_frame,
     text="Exit",
@@ -291,6 +580,39 @@ task_entry = tk.Entry(
     font=("Arial", 12)
 )
 task_entry.pack(pady=10)
+
+due_date_label = tk.Label(
+    add_task_frame,
+    text="Due date (YYYY-MM-DD):",
+    font=("Arial", 12)
+)
+due_date_label.pack(pady=5)
+
+due_date_entry = tk.Entry(
+    add_task_frame,
+    width=35,
+    font=("Arial", 12)
+)
+due_date_entry.pack(pady=10)
+
+importance_label = tk.Label(
+    add_task_frame,
+    text="Importance:",
+    font=("Arial", 12)
+)
+importance_label.pack(pady=5)
+
+importance_var = tk.StringVar(value="Medium")
+
+importance_menu = tk.OptionMenu(
+    add_task_frame,
+    importance_var,
+    "High",
+    "Medium",
+    "Low"
+)
+importance_menu.config(width=15, font=("Arial", 11))
+importance_menu.pack(pady=10)
 
 submit_task_button = tk.Button(
     add_task_frame,
@@ -342,6 +664,24 @@ view_status_label = tk.Label(
     font=("Arial", 11)
 )
 view_status_label.pack(pady=10)
+
+start_timer_button = tk.Button(
+    view_tasks_frame,
+    text="Start Timer",
+    width=20,
+    font=("Arial", 12),
+    command=start_selected_timer
+)
+start_timer_button.pack(pady=5)
+
+stop_timer_button = tk.Button(
+    view_tasks_frame,
+    text="Stop Timer",
+    width=20,
+    font=("Arial", 12),
+    command=stop_selected_timer
+)
+stop_timer_button.pack(pady=5)
 
 view_complete_task_button = tk.Button(
     view_tasks_frame,
